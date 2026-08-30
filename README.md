@@ -57,6 +57,7 @@ Never commit the token to a file or paste it into the workflow.
 
 Open **Actions → King Camp morning briefing → Run workflow**.
 
+- Enable `discover_chat` after adding the bot to Team WA King-Camp and sending `/chatid`; the action log will list the group's numeric ID without posting.
 - Leave `dry_run` enabled first. The briefing will be printed in the action log but not posted.
 - Run it again with `dry_run` disabled to send one live test to the group.
 - The scheduled run then posts every morning at 8:00 AM MDT through September 9.
