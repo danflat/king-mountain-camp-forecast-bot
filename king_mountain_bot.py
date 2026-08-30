@@ -23,7 +23,7 @@ from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 LOCAL_TZ = ZoneInfo("America/Boise")
 EVENT_START = dt.date(2026, 8, 30)
 EVENT_END = dt.date(2026, 9, 9)
@@ -374,6 +374,45 @@ def maximum_height_ft(rows: Iterable[dict[str, Any]], key: str) -> float:
     return max(present) if present else 0.0
 
 
+def thermal_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    """Return compact, hour-specific soaring details for the daily timeline."""
+    solar = number(row.get("shortwave_radiation")) or 0.0
+    cape = number(row.get("cape")) or 0.0
+    blh_ft = height_ft(row, "boundary_layer_height") or 0.0
+    temperature = number(row.get("temperature_2m"))
+    dewpoint = number(row.get("dew_point_2m"))
+    cloud_low = number(row.get("cloud_cover_low")) or 0.0
+    cloud_mid = number(row.get("cloud_cover_mid")) or 0.0
+    cloudbase_ft = None
+    if temperature is not None and dewpoint is not None:
+        cloudbase_ft = LZ_ELEV_FT + max(0.0, temperature - dewpoint) * 222.0
+    mixing_top_ft = LZ_ELEV_FT + blh_ft
+    blue = cloud_low < 35 and cloud_mid < 40
+    usable_top_ft = mixing_top_ft
+    if cloudbase_ft is not None and not blue:
+        usable_top_ft = min(mixing_top_ft, cloudbase_ft)
+    lift_ms = clamp(
+        0.45 + solar / 430.0 + (blh_ft / 3.28084) / 2800.0 + cape / 1600.0,
+        0.4,
+        5.5,
+    )
+    surface_speed = number(row.get("wind_speed_10m"))
+    surface_direction = number(row.get("wind_direction_10m"))
+    surface_wind = None
+    if surface_speed is not None and surface_direction is not None:
+        surface_wind = (surface_speed, surface_direction)
+    return {
+        "hour": int(str(row["time"])[11:13]),
+        "temperature_f": temperature,
+        "surface_wind": surface_wind,
+        "surface_gust_mph": number(row.get("wind_gusts_10m")),
+        "launch_wind": interpolated_wind(row, LAUNCH_ELEV_FT),
+        "lift_ms": lift_ms,
+        "usable_top_ft": usable_top_ft,
+        "precip_pct": number(row.get("precipitation_probability")) or 0.0,
+    }
+
+
 def hour_score(row: dict[str, Any]) -> float:
     solar = number(row.get("shortwave_radiation")) or 0.0
     precip = number(row.get("precipitation_probability")) or 0.0
@@ -493,6 +532,7 @@ def summarize_day(day: dt.date, all_rows: list[dict[str, Any]], lead_days: int) 
     xc_score -= 18 * int("wave/rotor setup aloft" in hazards)
     xc_score = clamp(xc_score, 0, 100)
     confidence = clamp(92 - lead_days * 7 - (15 if hazards else 0), 35, 95)
+    timeline = [thermal_snapshot(closest_hour(day_rows, hour)) for hour in (8, 10, 12, 14, 16, 18)]
 
     return {
         "date": day,
@@ -512,6 +552,7 @@ def summarize_day(day: dt.date, all_rows: list[dict[str, Any]], lead_days: int) 
         "hazards": hazards,
         "xc_score": round(xc_score),
         "confidence": round(confidence),
+        "timeline": timeline,
     }
 
 
@@ -544,18 +585,32 @@ def fmt_station(obs: StationObservation) -> str:
     return f"• {obs.label}: {wind}{suffix} ({freshness})"
 
 
+def fmt_hour(detail: dict[str, Any]) -> str:
+    surface = "n/a"
+    if detail["surface_wind"]:
+        speed, direction = detail["surface_wind"]
+        surface = f"{compass(direction)} {speed:.0f}"
+    gust = detail["surface_gust_mph"]
+    if gust is not None and detail["surface_wind"]:
+        surface += f" G{gust:.0f}"
+    if detail["surface_wind"]:
+        surface += " mph"
+    temperature = detail["temperature_f"]
+    temp_text = f"{temperature:.0f}°F" if temperature is not None else "temp n/a"
+    return (
+        f"{detail['hour']:02d}:00  LZ {surface} · launch {fmt_wind(detail['launch_wind'])} · "
+        f"{temp_text} · lift {detail['lift_ms']:.1f} · top {detail['usable_top_ft'] / 1000:.1f}k"
+    )
+
+
 def bottom_line(summary: dict[str, Any]) -> str:
     hazards = summary["hazards"]
     if not hazards:
         return (
-            f"Best modeled window {summary['window']}; thermals should build toward "
-            f"~{summary['usable_top_ft'] / 1000:.1f}k MSL with no major model red flag."
+            f"Thermals should build toward ~{summary['usable_top_ft'] / 1000:.1f}k MSL; "
+            "no major model red flag."
         )
-    return (
-        f"Best modeled window {summary['window']}, but manage "
-        + ", ".join(hazards[:2])
-        + "."
-    )
+    return "Primary concern: " + ", ".join(hazards[:2]) + "."
 
 
 def render_briefing(
@@ -570,12 +625,12 @@ def render_briefing(
     today = summaries[0]
     date_label = f"{today['date']:%a %b} {today['date'].day}".upper()
     lines = [
-        f"🪂 KING CAMP MORNING BRIEF — {date_label}",
-        f"Potential: {today['potential']} ({today['potential_score']}/100) • {today['phase']}",
+        f"🪂 KING MOUNTAIN · {date_label}",
+        f"{today['potential']} · {today['potential_score']}/100 · {today['phase']}",
+        f"Best window: {today['window']} MDT",
+        bottom_line(today),
         "",
-        f"BOTTOM LINE: {bottom_line(today)}",
-        "",
-        f"LIVE STATIONS • {now.strftime('%H:%M %Z')}",
+        f"LIVE · {now.strftime('%H:%M %Z')}",
     ]
     lines.extend(fmt_station(obs) for obs in observations)
     if station_errors:
@@ -588,33 +643,40 @@ def render_briefing(
         [
             "",
             "TODAY",
-            f"• Launch window: {today['window']} MDT (model-favored, verify cycles on site)",
-            f"• Lift: ~{today['lift_ms']:.1f} m/s • usable top ~{today['usable_top_ft'] / 1000:.1f}k MSL • {cloud_text}",
-            f"• 14:00 winds: 7.4k {fmt_wind(today['winds'][LAUNCH_ELEV_FT])} | 10.5k {fmt_wind(today['winds'][RIDGE_ELEV_FT])}",
-            f"• Aloft: 14k {fmt_wind(today['winds'][14000])} | 18k {fmt_wind(today['winds'][18000])}",
-            f"• XC {today['xc_score']}/100 • precip {today['precip_pct']:.0f}% • CAPE {today['cape']:.0f} J/kg • confidence {today['confidence']}%",
+            f"Lift {today['lift_ms']:.1f} m/s · top {today['usable_top_ft'] / 1000:.1f}k MSL · {cloud_text}",
+            f"XC {today['xc_score']}/100 · rain {today['precip_pct']:.0f}% · CAPE {today['cape']:.0f} · confidence {today['confidence']}%",
+            "",
+            "HOURLY MODEL · MDT",
+        ]
+    )
+    lines.extend(fmt_hour(detail) for detail in today["timeline"])
+    lines.extend(
+        [
+            "",
+            "ALOFT · 14:00",
+            f"7.4k {fmt_wind(today['winds'][LAUNCH_ELEV_FT])} · 10.5k {fmt_wind(today['winds'][RIDGE_ELEV_FT])}",
+            f"14k {fmt_wind(today['winds'][14000])} · 18k {fmt_wind(today['winds'][18000])}",
         ]
     )
     if today["hazards"]:
-        lines.append("• WATCH: " + "; ".join(today["hazards"]))
+        lines.append("WATCH · " + "; ".join(today["hazards"]))
     else:
-        lines.append("• WATCH: normal King terrain/valley-wind variability; no major model flag")
+        lines.append("WATCH · normal King terrain/valley-wind variability; no major model flag")
     if nws_alerts:
-        lines.append("• NWS ALERT: " + " | ".join(nws_alerts[:2]))
+        lines.append("NWS ALERT · " + " | ".join(nws_alerts[:2]))
     if nws_synopsis:
         compact = " ".join(nws_synopsis.split())
-        if len(compact) > 260:
-            compact = compact[:257].rstrip() + "…"
-        lines.append("• NWS: " + compact)
+        if len(compact) > 170:
+            compact = compact[:167].rstrip() + "…"
+        lines.append("NWS · " + compact)
 
     if len(summaries) > 1:
-        lines.extend(["", "EVENT TREND"])
-        for summary in summaries[1:]:
+        lines.extend(["", "NEXT"])
+        for summary in summaries[1:4]:
             flags = ", ".join(summary["hazards"][:1]) if summary["hazards"] else "no major flag"
             lines.append(
-                f"• {summary['date']:%a} {summary['date'].month}/{summary['date'].day}: {summary['potential']} • "
-                f"top {summary['usable_top_ft'] / 1000:.1f}k • 10.5k {fmt_wind(summary['winds'][RIDGE_ELEV_FT])} • "
-                f"conf {summary['confidence']}% • {flags}"
+                f"{summary['date']:%a} {summary['date'].month}/{summary['date'].day} · {summary['potential']} · "
+                f"top {summary['usable_top_ft'] / 1000:.1f}k · 10.5k {fmt_wind(summary['winds'][RIDGE_ELEV_FT])} · {flags}"
             )
 
     if nws_errors and env_bool("SHOW_SOURCE_ERRORS"):
@@ -622,9 +684,10 @@ def render_briefing(
     lines.extend(
         [
             "",
-            "Briefing aid only—not a launch/go-no-go call. Recheck sky, cycles, gust spread, radar and official alerts before flying.",
-            "Data: local Ecowitt stations + Open-Meteo model blend + NWS.",
-            "XC Skies cross-check: https://www.xcskies.com/map (PointCast/Skew-T at King)",
+            "/forecast · request a fresh briefing (allow ~10 min)",
+            "",
+            "Decision aid only—not a go/no-go call. Recheck sky, cycles, gust spread, radar and alerts.",
+            "Ecowitt · Open-Meteo · NWS · XC Skies: https://www.xcskies.com/map",
         ]
     )
     return "\n".join(lines)
@@ -641,7 +704,7 @@ def telegram_api(token: str, method: str, body: dict[str, Any] | None = None) ->
     return result
 
 
-def send_telegram(message: str) -> None:
+def send_telegram(message: str, reply_to_message_id: int | None = None) -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
@@ -664,7 +727,88 @@ def send_telegram(message: str) -> None:
         }
         if thread_id:
             body["message_thread_id"] = int(thread_id)
+        if reply_to_message_id is not None:
+            body["reply_parameters"] = {"message_id": reply_to_message_id}
         telegram_api(token, "sendMessage", body)
+
+
+def is_forecast_command(text: str) -> bool:
+    first = text.strip().split(maxsplit=1)[0].lower() if text.strip() else ""
+    return first.split("@", 1)[0] == "/forecast"
+
+
+def build_briefing(now: dt.datetime, forecast_date: dt.date) -> str:
+    observations, station_errors = fetch_all_stations()
+    forecast = fetch_open_meteo(now)
+    rows = hourly_rows(forecast)
+    summaries: list[dict[str, Any]] = []
+    day = forecast_date
+    while day <= EVENT_END:
+        try:
+            summaries.append(summarize_day(day, rows, (day - forecast_date).days))
+        except RuntimeError:
+            break
+        day += dt.timedelta(days=1)
+    if not summaries:
+        raise RuntimeError("No forecast data available for the requested date")
+    nws_synopsis, nws_alerts, nws_errors = fetch_nws()
+    return render_briefing(
+        now,
+        summaries,
+        observations,
+        station_errors,
+        nws_synopsis,
+        nws_alerts,
+        nws_errors,
+    )
+
+
+def set_bot_commands() -> int:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
+    telegram_api(
+        token,
+        "setMyCommands",
+        {"commands": [{"command": "forecast", "description": "Current King Mountain forecast"}]},
+    )
+    print("Registered /forecast with Telegram.")
+    return 0
+
+
+def process_commands() -> int:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
+    updates = telegram_api(
+        token,
+        "getUpdates",
+        {"timeout": 0, "allowed_updates": ["message"]},
+    ).get("result", [])
+    matching: list[dict[str, Any]] = []
+    for update in updates:
+        message = update.get("message") or {}
+        if str((message.get("chat") or {}).get("id", "")) != chat_id:
+            continue
+        if is_forecast_command(str(message.get("text") or "")):
+            matching.append(message)
+
+    if matching:
+        now = dt.datetime.now(LOCAL_TZ)
+        if EVENT_START <= now.date() <= EVENT_END:
+            briefing = build_briefing(now, now.date())
+            for message in matching:
+                send_telegram(briefing, message.get("message_id"))
+        else:
+            for message in matching:
+                send_telegram("King Camp event forecasting is inactive outside Aug 30–Sep 9.", message.get("message_id"))
+
+    if updates:
+        last_update_id = max(int(update["update_id"]) for update in updates)
+        telegram_api(token, "getUpdates", {"offset": last_update_id + 1, "timeout": 0})
+    print(f"Processed {len(updates)} update(s); answered {len(matching)} forecast command(s).")
+    return 0
 
 
 def discover_chats() -> int:
@@ -698,6 +842,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="Print the briefing without posting")
     parser.add_argument("--discover-chat", action="store_true", help="List recent Telegram chat IDs")
+    parser.add_argument("--commands", action="store_true", help="Answer pending /forecast commands")
+    parser.add_argument("--set-commands", action="store_true", help="Register the Telegram command menu")
     parser.add_argument("--date", type=dt.date.fromisoformat, help="Render a specific forecast date")
     parser.add_argument("--version", action="version", version=VERSION)
     return parser.parse_args()
@@ -707,36 +853,17 @@ def main() -> int:
     args = parse_args()
     if args.discover_chat:
         return discover_chats()
+    if args.commands:
+        return process_commands()
+    if args.set_commands:
+        return set_bot_commands()
     now = dt.datetime.now(LOCAL_TZ)
     forecast_date = args.date or now.date()
     if forecast_date < EVENT_START or forecast_date > EVENT_END:
         print(f"Outside event window ({EVENT_START} through {EVENT_END}); nothing sent.")
         return 0
 
-    observations, station_errors = fetch_all_stations()
-    forecast = fetch_open_meteo(now)
-    rows = hourly_rows(forecast)
-    available_end = EVENT_END
-    summaries: list[dict[str, Any]] = []
-    day = forecast_date
-    while day <= available_end:
-        try:
-            summaries.append(summarize_day(day, rows, (day - forecast_date).days))
-        except RuntimeError:
-            break
-        day += dt.timedelta(days=1)
-    if not summaries:
-        raise RuntimeError("No forecast data available for the requested date")
-    nws_synopsis, nws_alerts, nws_errors = fetch_nws()
-    message = render_briefing(
-        now,
-        summaries,
-        observations,
-        station_errors,
-        nws_synopsis,
-        nws_alerts,
-        nws_errors,
-    )
+    message = build_briefing(now, forecast_date)
     if args.dry_run or env_bool("DRY_RUN"):
         print(message)
     else:
