@@ -16,7 +16,7 @@ XC Skies is intentionally a human cross-check rather than an automated feed. Its
 
 ## Recommended hosting: GitHub Actions
 
-The included workflow posts at **8:00 AM MDT** every morning. Each message gives a detailed current-day briefing plus a compact outlook through September 9; confidence steps down with forecast lead time. GitHub schedules can occasionally start a few minutes late. The Python script enforces the event dates, so the daily workflow becomes a harmless no-op after September 9.
+The morning workflow posts at **8:00 AM MDT** every day. The command workflow checks Telegram about every 10 minutes and replies when anyone in Team WA King-Camp sends `/forecast`. Each message prioritizes today's live stations and a two-hour forecast timeline, followed by a compact three-day outlook. GitHub schedules can occasionally start late. The Python script enforces the event dates, so both workflows become harmless no-ops after September 9.
 
 ### 1. Create and add the Telegram bot
 
@@ -62,6 +62,8 @@ Open **Actions → King Camp morning briefing → Run workflow**.
 - Run it again with `dry_run` disabled to send one live test to the group.
 - The scheduled run then posts every morning at 8:00 AM MDT through September 9.
 
+Run **Actions → King Camp Telegram commands** once with `register_commands` enabled. This adds `/forecast` to Telegram's command menu. Anyone in the configured group can then send `/forecast` or `/forecast@TeamWAKingCampForecastBot`; the GitHub-hosted listener normally replies within about 10 minutes.
+
 ## Local test
 
 No third-party Python packages are needed:
@@ -89,7 +91,7 @@ The script uses only Python's standard library, so it can be run manually from a
 
 ## Tuning
 
-The event dates, 6:30 AM schedule, station shares, forecast coordinates, and altitude bands are near the top of `king_mountain_bot.py`. The current altitude wind bands are 7,400 ft launch, 10,500 ft ridge, 14,000 ft, and 18,000 ft MSL.
+The event dates, station shares, forecast coordinates, and altitude bands are near the top of `king_mountain_bot.py`. The current altitude wind bands are 7,400 ft launch, 10,500 ft ridge, 14,000 ft, and 18,000 ft MSL.
 
 The rating intentionally says `HIGHER`, `MIXED`, or `LOWER` **potential** instead of `GO/NO-GO`. Local cycles, gust spread, visible development, smoke, radar, pilot skill, and official alerts remain controlling inputs.
 
