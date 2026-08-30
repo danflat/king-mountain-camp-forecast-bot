@@ -6,6 +6,11 @@ on:
     - cron: "0 14 * * *"
   workflow_dispatch:
     inputs:
+      discover_chat:
+        description: List recent Telegram chats without posting
+        required: true
+        default: false
+        type: boolean
       dry_run:
         description: Print without posting to Telegram
         required: true
@@ -33,9 +38,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: Discover Telegram chat ID
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.discover_chat }}
+        run: python king_mountain_bot.py --discover-chat
       - name: Dry-run briefing
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && !inputs.discover_chat }}
         run: python king_mountain_bot.py --dry-run
       - name: Post briefing
-        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
+        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run && !inputs.discover_chat) }}
         run: python king_mountain_bot.py
