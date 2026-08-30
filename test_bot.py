@@ -73,6 +73,41 @@ class BotTests(unittest.TestCase):
         self.assertEqual(bot.compass(0), "N")
         self.assertEqual(bot.compass(270), "W")
 
+    def test_forecast_command(self):
+        self.assertTrue(bot.is_forecast_command("/forecast"))
+        self.assertTrue(bot.is_forecast_command("/forecast@TeamWAKingCampForecastBot"))
+        self.assertTrue(bot.is_forecast_command("/FORECAST please"))
+        self.assertFalse(bot.is_forecast_command("forecast"))
+        self.assertFalse(bot.is_forecast_command("/chatid"))
+
+    def test_thermal_snapshot(self):
+        row = {
+            "time": "2026-08-30T14:00",
+            "__units__": {
+                "boundary_layer_height": "ft",
+                "geopotential_height_850hPa": "ft",
+            },
+            "boundary_layer_height": 5000,
+            "shortwave_radiation": 700,
+            "cape": 0,
+            "temperature_2m": 75,
+            "dew_point_2m": 40,
+            "cloud_cover_low": 10,
+            "cloud_cover_mid": 10,
+            "wind_speed_10m": 8,
+            "wind_direction_10m": 250,
+            "wind_gusts_10m": 14,
+            "wind_speed_850hPa": 12,
+            "wind_direction_850hPa": 270,
+            "geopotential_height_850hPa": 7400,
+            "precipitation_probability": 5,
+        }
+        detail = bot.thermal_snapshot(row)
+        self.assertEqual(detail["hour"], 14)
+        self.assertEqual(detail["usable_top_ft"], 10500)
+        self.assertEqual(detail["surface_gust_mph"], 14)
+        self.assertGreater(detail["lift_ms"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
