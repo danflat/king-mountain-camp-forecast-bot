@@ -23,7 +23,7 @@ from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 LOCAL_TZ = ZoneInfo("America/Boise")
 EVENT_START = dt.date(2026, 8, 30)
 EVENT_END = dt.date(2026, 9, 9)
@@ -31,8 +31,8 @@ EVENT_END = dt.date(2026, 9, 9)
 LZ_LAT = 43.7630556
 LZ_LON = -113.3438889
 LZ_ELEV_FT = 5500
-LAUNCH_ELEV_FT = 7400
-RIDGE_ELEV_FT = 10500
+LAUNCH_ELEV_FT = 7381
+SUMMIT_ELEV_FT = 10612
 
 ECOWITT_STATIONS = (
     {"label": "King launch", "authorize": "YADDYT", "device_name": "King mountain"},
@@ -74,6 +74,22 @@ OPEN_METEO_HOURLY = (
         "wind_direction",
         "geopotential_height",
     )
+)
+
+MODEL_SPECS = (
+    ("HRRR", "https://api.open-meteo.com/v1/gfs", "ncep_hrrr_conus"),
+    ("NAM", "https://api.open-meteo.com/v1/gfs", "ncep_nam_conus"),
+    ("GFS", "https://api.open-meteo.com/v1/gfs", "gfs_seamless"),
+    ("ICON", "https://api.open-meteo.com/v1/dwd-icon", "icon_global"),
+)
+MODEL_HOURLY = (
+    "wind_speed_10m",
+    "wind_direction_10m",
+    "wind_gusts_10m",
+) + tuple(
+    f"{variable}_{level}hPa"
+    for level in (850, 800, 700, 600)
+    for variable in ("wind_speed", "wind_direction", "geopotential_height")
 )
 
 
@@ -247,6 +263,79 @@ def fetch_open_meteo(now: dt.datetime) -> dict[str, Any]:
             "hourly": ",".join(OPEN_METEO_HOURLY),
         },
     )
+
+
+def fetch_model_comparison(
+    now: dt.datetime, forecast_date: dt.date
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Fetch an independent 14:00 launch-layer check from four named models."""
+    lead_days = max(0, (forecast_date - now.date()).days)
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for label, endpoint, model_id in MODEL_SPECS:
+        try:
+            payload = request_json(
+                endpoint,
+                params={
+                    "latitude": LZ_LAT,
+                    "longitude": LZ_LON,
+                    "models": model_id,
+                    "timezone": "America/Boise",
+                    "forecast_days": min(16, lead_days + 1),
+                    "wind_speed_unit": "mph",
+                    "hourly": ",".join(MODEL_HOURLY),
+                },
+                attempts=2,
+            )
+            rows = [
+                row
+                for row in hourly_rows(payload)
+                if str(row.get("time", "")).startswith(forecast_date.isoformat())
+            ]
+            if not rows:
+                raise RuntimeError("outside this model's forecast horizon")
+            row = closest_hour(rows, 14)
+            launch_wind = interpolated_wind(row, LAUNCH_ELEV_FT)
+            surface_speed = number(row.get("wind_speed_10m"))
+            surface_direction = number(row.get("wind_direction_10m"))
+            surface_wind = (
+                (surface_speed, surface_direction)
+                if surface_speed is not None and surface_direction is not None
+                else None
+            )
+            if launch_wind is None and surface_wind is None:
+                raise RuntimeError("wind fields unavailable")
+            results.append(
+                {
+                    "name": label,
+                    "launch_wind": launch_wind,
+                    "surface_wind": surface_wind,
+                    "surface_gust_mph": number(row.get("wind_gusts_10m")),
+                }
+            )
+        except Exception as exc:
+            errors.append(f"{label}: {exc}")
+    return results, errors
+
+
+def model_agreement(models: list[dict[str, Any]]) -> str:
+    """Classify launch-wind agreement without hiding the actual model values."""
+    winds = [model["launch_wind"] for model in models if model.get("launch_wind")]
+    if len(winds) < 2:
+        return "LIMITED"
+    speeds = [wind[0] for wind in winds]
+    directions = [wind[1] for wind in winds]
+    direction_spread = max(
+        angular_distance(first, second)
+        for index, first in enumerate(directions)
+        for second in directions[index + 1 :]
+    )
+    speed_spread = max(speeds) - min(speeds)
+    if direction_spread <= 30 and speed_spread <= 6:
+        return "HIGH"
+    if direction_spread <= 60 and speed_spread <= 10:
+        return "MEDIUM"
+    return "LOW"
 
 
 def hourly_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -440,7 +529,7 @@ def phase_for_day(day_rows: list[dict[str, Any]], hazards: list[str]) -> str:
     p0 = number(morning.get("pressure_msl")) or 0.0
     p1 = number(evening.get("pressure_msl")) or p0
     trend = p1 - p0
-    ridge_wind = interpolated_wind(closest_hour(day_rows, 14), RIDGE_ELEV_FT)
+    ridge_wind = interpolated_wind(closest_hour(day_rows, 14), SUMMIT_ELEV_FT)
     ridge_dir = ridge_wind[1] if ridge_wind else 270.0
     if any("thunder" in hazard.lower() or "rain" in hazard.lower() for hazard in hazards):
         return "storm phase"
@@ -490,10 +579,10 @@ def summarize_day(day: dt.date, all_rows: list[dict[str, Any]], lead_days: int) 
     check_row = closest_hour(day_rows, 14)
     winds = {
         altitude: interpolated_wind(check_row, altitude)
-        for altitude in (LAUNCH_ELEV_FT, RIDGE_ELEV_FT, 14000, 18000)
+        for altitude in (LAUNCH_ELEV_FT, SUMMIT_ELEV_FT, 14000, 18000)
     }
     launch_wind = winds[LAUNCH_ELEV_FT]
-    ridge_wind = winds[RIDGE_ELEV_FT]
+    ridge_wind = winds[SUMMIT_ELEV_FT]
     fourteen_wind = winds[14000]
 
     hazards: list[str] = []
@@ -621,6 +710,8 @@ def render_briefing(
     nws_synopsis: str | None,
     nws_alerts: list[str],
     nws_errors: list[str],
+    model_comparison: list[dict[str, Any]],
+    model_errors: list[str],
 ) -> str:
     today = summaries[0]
     date_label = f"{today['date']:%a %b} {today['date'].day}".upper()
@@ -653,8 +744,33 @@ def render_briefing(
     lines.extend(
         [
             "",
-            "ALOFT · 14:00",
-            f"7.4k {fmt_wind(today['winds'][LAUNCH_ELEV_FT])} · 10.5k {fmt_wind(today['winds'][RIDGE_ELEV_FT])}",
+            f"LAUNCH MODEL CHECK · 14:00 · {LAUNCH_ELEV_FT:,}' MSL",
+        ]
+    )
+    if model_comparison:
+        for model in model_comparison:
+            lz = fmt_wind(model["surface_wind"])
+            gust = model["surface_gust_mph"]
+            if gust is not None:
+                lz += f" G{gust:.0f}"
+            lines.append(
+                f"{model['name']} · launch {fmt_wind(model['launch_wind'])} · LZ {lz}"
+            )
+        launch_speeds = [
+            model["launch_wind"][0]
+            for model in model_comparison
+            if model.get("launch_wind")
+        ]
+        if launch_speeds:
+            lines.append(
+                f"Agreement {model_agreement(model_comparison)} · launch range "
+                f"{min(launch_speeds):.0f}–{max(launch_speeds):.0f} mph"
+            )
+    else:
+        lines.append("Named-model comparison unavailable")
+    lines.extend(
+        [
+            f"HEIGHT CHECK · summit {SUMMIT_ELEV_FT / 1000:.1f}k {fmt_wind(today['winds'][SUMMIT_ELEV_FT])}",
             f"14k {fmt_wind(today['winds'][14000])} · 18k {fmt_wind(today['winds'][18000])}",
         ]
     )
@@ -676,18 +792,20 @@ def render_briefing(
             flags = ", ".join(summary["hazards"][:1]) if summary["hazards"] else "no major flag"
             lines.append(
                 f"{summary['date']:%a} {summary['date'].month}/{summary['date'].day} · {summary['potential']} · "
-                f"top {summary['usable_top_ft'] / 1000:.1f}k · 10.5k {fmt_wind(summary['winds'][RIDGE_ELEV_FT])} · {flags}"
+                f"top {summary['usable_top_ft'] / 1000:.1f}k · summit {fmt_wind(summary['winds'][SUMMIT_ELEV_FT])} · {flags}"
             )
 
     if nws_errors and env_bool("SHOW_SOURCE_ERRORS"):
         lines.append("• Source note: " + "; ".join(nws_errors))
+    if model_errors and env_bool("SHOW_SOURCE_ERRORS"):
+        lines.append("• Model note: " + "; ".join(model_errors))
     lines.extend(
         [
             "",
             "/forecast · request a fresh briefing (allow ~10 min)",
             "",
             "Decision aid only—not a go/no-go call. Recheck sky, cycles, gust spread, radar and alerts.",
-            "Data · Ecowitt · Open-Meteo · NWS",
+            "Data · Ecowitt · HRRR/NAM/GFS/ICON via Open-Meteo · NWS",
             "Cross-check · XC Skies: https://www.xcskies.com/map",
             "Windy.com King: https://www.windy.com/43.763/-113.344",
             "Windy.app map: https://windy.app/map",
@@ -754,6 +872,7 @@ def build_briefing(now: dt.datetime, forecast_date: dt.date) -> str:
         day += dt.timedelta(days=1)
     if not summaries:
         raise RuntimeError("No forecast data available for the requested date")
+    model_comparison, model_errors = fetch_model_comparison(now, forecast_date)
     nws_synopsis, nws_alerts, nws_errors = fetch_nws()
     return render_briefing(
         now,
@@ -763,6 +882,8 @@ def build_briefing(now: dt.datetime, forecast_date: dt.date) -> str:
         nws_synopsis,
         nws_alerts,
         nws_errors,
+        model_comparison,
+        model_errors,
     )
 
 
