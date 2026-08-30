@@ -69,6 +69,24 @@ class BotTests(unittest.TestCase):
         self.assertLessEqual(bot.EVENT_START, dt.date(2026, 8, 30))
         self.assertEqual(bot.EVENT_END, dt.date(2026, 9, 9))
 
+    def test_site_elevations_are_distinct(self):
+        self.assertEqual(bot.LAUNCH_ELEV_FT, 7381)
+        self.assertEqual(bot.SUMMIT_ELEV_FT, 10612)
+
+    def test_model_agreement(self):
+        high = [
+            {"launch_wind": (10, 260)},
+            {"launch_wind": (13, 275)},
+            {"launch_wind": (12, 270)},
+        ]
+        low = [
+            {"launch_wind": (7, 90)},
+            {"launch_wind": (20, 270)},
+        ]
+        self.assertEqual(bot.model_agreement(high), "HIGH")
+        self.assertEqual(bot.model_agreement(low), "LOW")
+        self.assertEqual(bot.model_agreement([{"launch_wind": None}]), "LIMITED")
+
     def test_compass(self):
         self.assertEqual(bot.compass(0), "N")
         self.assertEqual(bot.compass(270), "W")
