@@ -687,7 +687,10 @@ def render_briefing(
             "/forecast · request a fresh briefing (allow ~10 min)",
             "",
             "Decision aid only—not a go/no-go call. Recheck sky, cycles, gust spread, radar and alerts.",
-            "Ecowitt · Open-Meteo · NWS · XC Skies: https://www.xcskies.com/map",
+            "Data · Ecowitt · Open-Meteo · NWS",
+            "Cross-check · XC Skies: https://www.xcskies.com/map",
+            "Windy.com King: https://www.windy.com/43.763/-113.344",
+            "Windy.app map: https://windy.app/map",
         ]
     )
     return "\n".join(lines)
