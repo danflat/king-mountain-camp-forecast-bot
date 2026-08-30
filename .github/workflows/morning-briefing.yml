@@ -1,0 +1,41 @@
+name: King Camp morning briefing
+
+on:
+  schedule:
+    # 08:00 MDT (America/Boise) during the Aug 30–Sep 9, 2026 event window.
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print without posting to Telegram
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: king-camp-morning-briefing
+  cancel-in-progress: false
+
+jobs:
+  briefing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}
+      NWS_USER_AGENT: KingCampForecastBot/1.0 (temporary event briefing)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dry-run briefing
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: python king_mountain_bot.py --dry-run
+      - name: Post briefing
+        if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
+        run: python king_mountain_bot.py
