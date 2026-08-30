@@ -1,0 +1,41 @@
+name: King Camp Telegram commands
+
+on:
+  schedule:
+    # GitHub-hosted polling: /forecast replies normally arrive within about 10 minutes.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      register_commands:
+        description: Register /forecast in the Telegram command menu
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: king-camp-telegram-commands
+  cancel-in-progress: false
+
+jobs:
+  commands:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TELEGRAM_THREAD_ID: ${{ secrets.TELEGRAM_THREAD_ID }}
+      NWS_USER_AGENT: KingCampForecastBot/1.1 (temporary event briefing)
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Register Telegram command menu
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.register_commands }}
+        run: python king_mountain_bot.py --set-commands
+      - name: Answer pending commands
+        if: ${{ github.event_name == 'schedule' || !inputs.register_commands }}
+        run: python king_mountain_bot.py --commands
