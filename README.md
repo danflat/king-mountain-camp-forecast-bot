@@ -9,10 +9,11 @@ The bot combines:
 - NWS forecast text and active alerts
 - King-specific logic for the west-facing launch, morning Coyote drainage flow, valley-wind reversal, thermal depth, Mackay-area overdevelopment, and strong-flow wave/rotor potential
 - A direct XC Skies PointCast/Skew-T cross-check link in every briefing
+- Direct King Mountain cross-check links for Windy.com and Windy.app
 
 It does **not** use an LLM or require an OpenAI/API subscription. The briefing is a decision aid, never a launch or go/no-go instruction.
 
-XC Skies is intentionally a human cross-check rather than an automated feed. Its published site does not document a supported forecast API, its forecast tools expect an account/subscription, and its terms limit redistribution. The bot therefore links pilots to XC Skies without scraping or reposting proprietary forecast fields.
+XC Skies, Windy.com, and Windy.app are intentionally human cross-checks rather than scraped feeds. XC Skies does not document a supported forecast API for this use. Windy.com's production Point Forecast API requires a separate paid key, while its free testing tier deliberately alters forecast data. Windy.app provides public maps/widgets but does not document a supported raw-data API for this bot. The briefing therefore links pilots directly to each service without scraping or presenting their data as part of the calculated score.
 
 ## Recommended hosting: GitHub Actions
 
