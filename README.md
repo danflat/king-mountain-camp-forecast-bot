@@ -6,6 +6,7 @@ The bot combines:
 
 - King launch, Coyote, and Glider Park LZ live Ecowitt observations
 - Open-Meteo hourly and pressure-level guidance through the event window
+- A named-model 2 PM comparison: HRRR, NAM, GFS, and ICON, with a launch-wind agreement rating
 - NWS forecast text and active alerts
 - King-specific logic for the west-facing launch, morning Coyote drainage flow, valley-wind reversal, thermal depth, Mackay-area overdevelopment, and strong-flow wave/rotor potential
 - A direct XC Skies PointCast/Skew-T cross-check link in every briefing
@@ -14,6 +15,8 @@ The bot combines:
 It does **not** use an LLM or require an OpenAI/API subscription. The briefing is a decision aid, never a launch or go/no-go instruction.
 
 XC Skies, Windy.com, and Windy.app are intentionally human cross-checks rather than scraped feeds. XC Skies does not document a supported forecast API for this use. Windy.com's production Point Forecast API requires a separate paid key, while its free testing tier deliberately alters forecast data. Windy.app provides public maps/widgets but does not document a supported raw-data API for this bot. The briefing therefore links pilots directly to each service without scraping or presenting their data as part of the calculated score.
+
+The named-model check uses supported Open-Meteo endpoints instead: NOAA HRRR and NAM for short-range detail, NOAA GFS for the longer horizon, and DWD ICON as an independent global model. It compares launch-level winds at 2 PM whenever pressure-level fields exist. NAM is still shown for its LZ wind and gust when its pressure-level launch wind is unavailable; the bot does not substitute a surface wind and pretend it represents launch.
 
 ## Recommended hosting: GitHub Actions
 
@@ -92,7 +95,7 @@ The script uses only Python's standard library, so it can be run manually from a
 
 ## Tuning
 
-The event dates, station shares, forecast coordinates, and altitude bands are near the top of `king_mountain_bot.py`. The current altitude wind bands are 7,400 ft launch, 10,500 ft ridge, 14,000 ft, and 18,000 ft MSL.
+The event dates, station shares, forecast coordinates, and altitude bands are near the top of `king_mountain_bot.py`. The lower/main King PG launch is set to **7,381 ft MSL** and the summit is separately set to **10,612 ft MSL**, followed by 14,000 ft and 18,000 ft checks. Model winds are vector-interpolated between pressure levels to the launch elevation; summit and higher winds are displayed as a height/shear check, not as launch conditions.
 
 The rating intentionally says `HIGHER`, `MIXED`, or `LOWER` **potential** instead of `GO/NO-GO`. Local cycles, gust spread, visible development, smoke, radar, pilot skill, and official alerts remain controlling inputs.
 
